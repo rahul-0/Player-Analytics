@@ -1,0 +1,143 @@
+---
+title: "BUAN 6356"
+Subtitle: "Assignment 4"
+date: "4/15/2020"
+output: html_document
+---
+
+#Loading all the relevant packages
+```{r }
+pacman::p_load(ISLR, gplots, ggplot2, leaps, caret, tree, rpart, rpart.plot, caret, gbm, randomForest, ca, data.table)
+theme_set(theme_classic())
+```
+
+
+```{r}
+#Question 1
+#Reading the dataset from the ISLR package
+dataset_hitters <-  Hitters
+
+#Omitting the NA records from the dataset
+dataset_hitters_omitted <- setDT(na.omit(dataset_hitters))
+nrow(dataset_hitters) - nrow(dataset_hitters_omitted) 
+```
+#59 observations/records do not have salary information. They are removed from the dataset.
+
+```{r}
+#Question 2
+ggplot(dataset_hitters_omitted, aes(x=dataset_hitters_omitted$Salary)) + geom_histogram(color = "black", fill = "white")
+
+#Scaling salary to logarithmic scale to make it normally distributed
+dataset_hitters_omitted$Salary <-  log(dataset_hitters_omitted$Salary)
+ggplot(dataset_hitters_omitted, aes(x=dataset_hitters_omitted$Salary)) + geom_histogram( color = "black", fill = "white")
+
+
+```
+#The plot of the salary seems to be skewed to the right with very few hitters in the upper end of the salary spectrum. Transforming salary into a logarithmic scale removes the skewness and reduces the impact of outliers as one can see from the two historgrams above
+#One of the reason of log transformation is also to check if the transformation helps in producing normally distributed results. In this case, that does not seem to happen.
+
+
+```{r}
+#Question 3
+ggplot(dataset_hitters_omitted, aes(x=dataset_hitters_omitted$Years, y=dataset_hitters_omitted$Hits)) + geom_point(aes(col = dataset_hitters_omitted$Salary)) +
+     guides(colour = guide_colourbar(order = 1),
+         alpha = guide_legend(order = 2),
+         size = guide_legend(order = 3),
+         fill = guide_legend(reverse = TRUE)) + labs(x="Years", y="Hits", color = "Salary log scale")
+```
+
+#On plotting the Years v/s Hits in the scatter plot and coloring it based on the salary log scale, it seems that Hitters with more number of years are paid more.
+
+```{r}
+#Question 4 - Linear Regression and regsubsets
+
+hitters_lm <- lm(Salary~., data = dataset_hitters_omitted)
+
+hitters_exhaustive <- regsubsets(dataset_hitters_omitted$Salary ~ ., 
+                                 data = dataset_hitters_omitted, 
+                                 nbest = 1, 
+                                 nvmax = dim(dataset_hitters_omitted)[2], 
+                                 method = "exhaustive")
+
+summary_hitters_exhaustive <- summary(hitters_exhaustive)
+summary_hitters_exhaustive
+summary_hitters_exhaustive$bic
+summary_hitters_exhaustive$which[which.min(summary_hitters_exhaustive$bic),]
+
+```
+
+# When using BIC to evaluate and compare subsets of predictors, the model with the lowest BIC is the best model.
+
+# The predictor variables included in the best model (the model with the smallest BIC value) are: Hits, Walks, and Years.
+
+
+```{r}
+#Question 5 - Training and test datasets
+set.seed(42) 
+train.index <- sample(1:nrow(dataset_hitters_omitted), 0.8*(nrow(dataset_hitters_omitted)))  
+hitters_train <- dataset_hitters_omitted[train.index, ]
+hitters_valid<- dataset_hitters_omitted[-train.index, ]
+nrow(hitters_train)
+nrow(hitters_valid)
+```
+
+```{r}
+# Question 6- regression tree model
+rpart.hitters <-  rpart(Salary ~ Years + Hits, hitters_train, method = "anova")
+summary(rpart.hitters)
+#plotting the visual tree
+rpart.plot(rpart.hitters, type = 3)
+# Outputting the regression rules
+rpart.rules(rpart.hitters)
+```
+#As we can see, salary is highest for players who have experience years >= 5 and hits >= 104.
+
+
+```{r}
+#Question 7-Regression trees using all the data
+
+#choosing lambda values ranging from .001 to .01 incrementing by .0005
+lambdaVals = seq(.001, 0.01 , by = .0005)
+train.err = rep(NA, length(lambdaVals))
+#Performing boosting on training data set using range of value of lambda
+for (i in 1:length(lambdaVals)) {
+    boost.hitters = gbm(Salary ~ ., data = hitters_train, distribution = "gaussian", n.trees = 1000, shrinkage = lambdaVals[i])
+    pred.train = predict(boost.hitters, hitters_train, n.trees = 1000)
+    train.err[i] = mean((pred.train - hitters_train$Salary)^2)
+}
+#Plotting the MSE VS Shrinkage values
+plot(lambdaVals, train.err, type = "b", xlab = "Shrinkage values", ylab = "Training MSE")
+```
+#as per the graph, MSE keeps going down as the lambda going up. Among 0.002 to 0-01, the best lambda is 1, which yields the minimum MSE (0.000897402).
+
+
+```{r}
+#Question 8 Produce a plot with different shrinkage values on the x-axis and the corresponding test set MSE on the y-axis. 
+set.seed(42)
+test.err <- rep(NA, length(lambdaVals))
+#Calculating MSE for test data for different values of lambda
+for (i in 1:length(lambdaVals)) {
+    boost.hitters = gbm(Salary ~ ., data = hitters_train, distribution = "gaussian", n.trees = 1000, shrinkage = lambdaVals[i])
+    pred.test = predict(boost.hitters, hitters_valid, n.trees = 1000)
+    test.err[i] = mean((pred.test - hitters_valid$Salary)^2)
+}
+#Plotting Shrinkage values corresponding to MSE for Test Data set
+plot(lambdaVals, test.err, type = "b", xlab = "Shrinkage values", ylab = "Test MSE")
+```
+
+
+```{r}
+#Question 9  Which variables appear to be the most important predictors in the boosted model?
+
+summary(boost.hitters)
+```
+Answer: CAtBat and CRBI are the most important predictors in the boosted model.
+
+```{r}
+#QUESTION 10: Now apply bagging to the training set. What is the test set MSE for this approach?
+bag.model <- randomForest(Salary~., data=hitters_train,  
+                            mtry = 13, importance = TRUE)
+test_pred <- predict(bag.model, newdata=hitters_valid)
+mean((test_pred-hitters_valid$Salary)^2)
+```
+Answer: 0.244 is  the test set MSE.
